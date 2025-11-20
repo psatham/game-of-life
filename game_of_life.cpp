@@ -10,28 +10,46 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <csignal>
+#include <unistd.h>
+#include <unordered_map>
 
-// ------------------ ANSI helpers ------------------ //
+// ---------------- Terminal helpers ---------------- //
 
-namespace ansi {
-    inline void hide_cursor(std::ostream& os) { os << "\x1b[?25l"; }
-    inline void show_cursor(std::ostream& os) { os << "\x1b[?25h"; }
-    inline void clear_screen(std::ostream& os) { os << "\x1b[2J"; }
-    inline void home(std::ostream& os) { os << "\x1b[H"; }
+namespace terminal {
+    static volatile sig_atomic_t tty = 0; // stdout is a terminal: 1 = yes, 0 = no
+
+    inline void hide()  { if (tty) write(STDOUT_FILENO, "\x1b[?25l", 6); }
+    inline void show()  { if (tty) write(STDOUT_FILENO, "\x1b[?25h", 6); }
+    inline void clear() { if (tty) write(STDOUT_FILENO, "\x1b[2J",   4); }
+    inline void home()  { if (tty) write(STDOUT_FILENO, "\x1b[H",    3); }
+
+    inline void on_signal(int sig) {
+        show();                    // show cursor on program escape signals
+        _exit(128 + (sig & 0x7F)); // conventional exit code: 128 + signal number
+    }
+
+    inline void setup() {
+        tty = isatty(STDOUT_FILENO) ? 1 : 0; // detect once for async-signal-safe use
+
+        std::signal(SIGINT,  on_signal); // interrupt signal (Ctrl+C)
+        std::signal(SIGTERM, on_signal); // terminate signal ('kill <pid>')
+        std::signal(SIGHUP,  on_signal); // hang up signal (terminal is closed)
+
+        std::atexit([]{ show(); });  // show cursor on normal program exit
+
+        hide();  // hide cursor
+        clear(); // clear the screen
+        home();  // move cursor to top-left
+    }
 }
-
-struct CursorGuard {
-    std::ostream& os;
-    explicit CursorGuard(std::ostream& o) : os(o) { ansi::hide_cursor(os); }
-    ~CursorGuard() { ansi::show_cursor(os); }
-};
 
 // ---------------- Argument parsing ---------------- //
 
 struct Args {
     int rows = 24, cols = 40, fps = 15;
     std::optional<std::uint32_t> seed;
-    std::vector<std::string> presets;
+    std::vector<std::string> patterns;
 };
 
 static bool starts_with(std::string_view s, std::string_view target) {
@@ -104,7 +122,7 @@ static Args parse_args(int argc, char** argv) {
         else if (starts_with(arg, "--cols"))    a.cols = to_int_or_exit(arg);
         else if (starts_with(arg, "--fps"))     a.fps = to_int_or_exit(arg);
         else if (starts_with(arg, "--seed"))    a.seed = to_u32_or_exit(arg);
-        else if (starts_with(arg, "--presets")) a.presets = to_string_list_or_exit(arg);
+        else if (starts_with(arg, "--patterns")) a.patterns = to_string_list_or_exit(arg);
         else {
             std::cerr << "Unknown argument: " << arg << "\n";
             std::exit(1);
@@ -157,34 +175,179 @@ struct Board {
     }
 
     void render(std::ostream& os) const {
-        ansi::home(os);
+        terminal::home(); // move cursor to top-left
         for (int r = 0; r < height; ++r) {
             for (int c = 0; c < width; ++c)
                 os << (get(r, c) ? "██" : "  ");
             os << '\n';
         }
-        os.flush();
     }
 };
 
-static void seed_presets(Board& b, const std::vector<std::string>& names) {
-    for (auto& s : names) {
-        if (s == "glider") {
-            int r = 2, c = 2;
-            b.set(r+0, c+1, 1); b.set(r+1, c+2, 1);
-            b.set(r+2, c+0, 1); b.set(r+2, c+1, 1); b.set(r+2, c+2, 1);
-        }
-        else if (s == "exploder") {
-            int r = 10, c = 10;
-            b.set(r, c, 1);
-            b.set(r, c-1, 1); b.set(r, c+1, 1);
-            b.set(r-1, c, 1); b.set(r+1, c, 1);
-            b.set(r-2, c, 1); b.set(r+2, c, 1);
-        }
-        else {
-            std::cerr << "Unknown preset: " << s << "\n";
+static void load_patterns(Board& b, const std::vector<std::string>& names) {
+    static const std::unordered_map<std::string, std::vector<std::string>> patterns = {
+        // Still Lifes
+        {"block", {
+            "OO",
+            "OO"
+        }},
+        {"beehive", {
+            ".OO.",
+            "O..O",
+            ".OO."
+        }},
+        {"loaf", {
+            ".OO.",
+            "O..O",
+            ".O.O",
+            "..O."
+        }},
+        {"boat", {
+            "OO.",
+            "O.O",
+            ".O."
+        }},
+        {"tub", {
+            ".O.",
+            "O.O",
+            ".O."
+        }},
+
+        // Oscillators
+        {"blinker", {
+            "...",
+            "OOO",
+            "...",
+        }},
+        {"toad", {
+            "....",
+            ".OOO",
+            "OOO.",
+            "....",
+        }},
+        {"beacon", {
+            "OO..",
+            "OO..",
+            "..OO",
+            "..OO"
+        }},
+        {"pulsar", {
+            "....O.....O....",
+            "....O.....O....",
+            "....OO...OO....",
+            "...............",
+            "OOO..OO.OO..OOO",
+            "..O.O.O.O.O.O..",
+            "....OO...OO....",
+            "...............",
+            "....OO...OO....",
+            "..O.O.O.O.O.O..",
+            "OOO..OO.OO..OOO",
+            "...............",
+            "....OO...OO....",
+            "....O.....O....",
+            "....O.....O....",
+        }},
+        {"pentadecathlon", {
+            ".........",
+            ".........",
+            "...OOO...",
+            "....O....",
+            "....O....",
+            "...OOO...",
+            ".........",
+            "...OOO...",
+            "...OOO...",
+            ".........",
+            "...OOO...",
+            "....O....",
+            "....O....",
+            "...OOO...",
+            ".........",
+            ".........",
+        }},
+
+        // Spaceships
+        {"glider", {
+            ".O.",
+            "..O",
+            "OOO"
+        }},
+        {"lwss", {
+            "O..O.",
+            "....O",
+            "O...O",
+            ".OOOO"
+        }},
+        {"mwss", {
+            "..O...",
+            "O...O.",
+            ".....O",
+            "O....O",
+            ".OOOOO"
+        }},
+        {"hwss", {
+            "..OO...",
+            "O....O.",
+            "......O",
+            "O.....O",
+            ".OOOOOO"
+        }},
+    };
+
+    std::fill(b.cells.begin(), b.cells.end(), false);
+
+    int margin = 2;          // 2-cell margin
+    int cur_row = margin;    // initialize with top margin
+    int cur_col = margin;    // initialize with left margin
+    int line_height = 0;     // tallest pattern in this row
+
+    for (const auto& s : names) {
+        auto it = patterns.find(s);
+        if (it == patterns.end()) {
+            std::cerr << "Unknown pattern: " << s << "\n";
             std::exit(1);
         }
+
+        const auto& pattern = it->second;
+        if (pattern.empty()) 
+            continue;
+
+        int pattern_height = static_cast<int>(pattern.size());
+        int pattern_width  = static_cast<int>(pattern[0].size());
+
+        // If pattern too wide or tall to fit on board
+        if (pattern_width + 2 > b.width || pattern_height > b.height) {
+            std::cerr << "Pattern \"" << s << "\" too large to fit on " << b.height << "x" << b.width << " board\n";
+            continue;
+        }
+
+        // If pattern too wide to fit on current row
+        if (cur_col + pattern_width + margin > b.width) {
+            cur_row += line_height + margin;   // move down one row of patterns
+            cur_col = margin;                  // reset to left margin
+            line_height = 0;
+        }
+
+        // If no vertical room left
+        if (cur_row + pattern_height > b.height) {
+            std::cerr << "No more room to place pattern \"" << s << "\"; remaining patterns skipped.\n";
+            break;
+        }
+
+        // Draw pattern
+        for (int r = 0; r < pattern_height; ++r) {
+            const std::string& pattern_row = pattern[r];
+            for (int c = 0; c < pattern_width; ++c) {
+                if (pattern_row[c] == 'O') {
+                    b.set(cur_row + r, cur_col + c, true);
+                }
+            }
+        }
+
+        // Update layout
+        line_height = std::max(line_height, pattern_height);
+        cur_col += pattern_width + margin;
     }
 }
 
@@ -194,21 +357,20 @@ int main(int argc, char** argv) {
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
 
+    terminal::setup();
+
     Args args = parse_args(argc, argv);
     Board board(args.rows, args.cols);
 
-    if (!args.presets.empty()) {
-        seed_presets(board, args.presets);
+    if (!args.patterns.empty()) {
+        load_patterns(board, args.patterns);
     } else {
         std::mt19937 rng(args.seed ? *args.seed : std::random_device{}());
-        std::bernoulli_distribution alive(0.20);
+        std::bernoulli_distribution alive(0.50);
         for (int r = 0; r < args.rows; ++r)
             for (int c = 0; c < args.cols; ++c)
                 board.set(r, c, alive(rng));
     }
-
-    CursorGuard guard(std::cout);
-    ansi::clear_screen(std::cout);
 
     using clock = std::chrono::steady_clock;
     auto frame = std::chrono::milliseconds(1000 / args.fps);
