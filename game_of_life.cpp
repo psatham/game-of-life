@@ -300,7 +300,7 @@ static void load_patterns(Board& b, const std::vector<std::string>& names) {
     int margin = 2;          // 2-cell margin
     int cur_row = margin;    // initialize with top margin
     int cur_col = margin;    // initialize with left margin
-    int line_height = 0;     // tallest pattern in this row
+    int jump_by_height = 0;  // tallest pattern in this row
 
     for (const auto& s : names) {
         auto it = patterns.find(s);
@@ -324,9 +324,9 @@ static void load_patterns(Board& b, const std::vector<std::string>& names) {
 
         // If pattern too wide to fit on current row
         if (cur_col + pattern_width + margin > b.width) {
-            cur_row += line_height + margin;   // move down one row of patterns
-            cur_col = margin;                  // reset to left margin
-            line_height = 0;
+            cur_row += jump_by_height + margin;   // increment by height of tallest pattern (to prevent collision) plus margin
+            cur_col = margin;                     // reset to left margin
+            jump_by_height = 0;
         }
 
         // If no vertical room left
@@ -346,7 +346,7 @@ static void load_patterns(Board& b, const std::vector<std::string>& names) {
         }
 
         // Update layout
-        line_height = std::max(line_height, pattern_height);
+        jump_by_height = std::max(jump_by_height, pattern_height);
         cur_col += pattern_width + margin;
     }
 }
