@@ -44,6 +44,143 @@ namespace terminal {
     }
 }
 
+// ---------------- Pattern library ---------------- //
+
+namespace patterns {
+    struct Pattern {
+        std::string_view name;
+        std::vector<std::string> rows;
+    };
+
+    struct Group {
+        std::string_view label;
+        std::vector<Pattern> members;
+    };
+
+    // Grouped, and in display order: --help prints these groups verbatim.
+    static const std::vector<Group>& all() {
+        static const std::vector<Group> groups = {
+            {"Still lifes", {
+                {"block", {
+                    "OO",
+                    "OO"
+                }},
+                {"beehive", {
+                    ".OO.",
+                    "O..O",
+                    ".OO."
+                }},
+                {"loaf", {
+                    ".OO.",
+                    "O..O",
+                    ".O.O",
+                    "..O."
+                }},
+                {"boat", {
+                    "OO.",
+                    "O.O",
+                    ".O."
+                }},
+                {"tub", {
+                    ".O.",
+                    "O.O",
+                    ".O."
+                }},
+            }},
+            {"Oscillators", {
+                {"blinker", {
+                    "...",
+                    "OOO",
+                    "..."
+                }},
+                {"toad", {
+                    "....",
+                    ".OOO",
+                    "OOO.",
+                    "...."
+                }},
+                {"beacon", {
+                    "OO..",
+                    "OO..",
+                    "..OO",
+                    "..OO"
+                }},
+                {"pulsar", {
+                    "....O.....O....",
+                    "....O.....O....",
+                    "....OO...OO....",
+                    "...............",
+                    "OOO..OO.OO..OOO",
+                    "..O.O.O.O.O.O..",
+                    "....OO...OO....",
+                    "...............",
+                    "....OO...OO....",
+                    "..O.O.O.O.O.O..",
+                    "OOO..OO.OO..OOO",
+                    "...............",
+                    "....OO...OO....",
+                    "....O.....O....",
+                    "....O.....O...."
+                }},
+                {"pentadecathlon", {
+                    ".........",
+                    ".........",
+                    "...OOO...",
+                    "....O....",
+                    "....O....",
+                    "...OOO...",
+                    ".........",
+                    "...OOO...",
+                    "...OOO...",
+                    ".........",
+                    "...OOO...",
+                    "....O....",
+                    "....O....",
+                    "...OOO...",
+                    ".........",
+                    "........."
+                }},
+            }},
+            {"Spaceships", {
+                {"glider", {
+                    ".O.",
+                    "..O",
+                    "OOO"
+                }},
+                {"lwss", {
+                    "O..O.",
+                    "....O",
+                    "O...O",
+                    ".OOOO"
+                }},
+                {"mwss", {
+                    "..O...",
+                    "O...O.",
+                    ".....O",
+                    "O....O",
+                    ".OOOOO"
+                }},
+                {"hwss", {
+                    "..OO...",
+                    "O....O.",
+                    "......O",
+                    "O.....O",
+                    ".OOOOOO"
+                }},
+            }},
+        };
+        return groups;
+    }
+
+    // Linear scan; the library is small and staying ordered matters more than lookup speed.
+    static const std::vector<std::string>* find(std::string_view name) {
+        for (const auto& group : all())
+            for (const auto& pattern : group.members)
+                if (pattern.name == name) return &pattern.rows;
+        return nullptr;
+    }
+}
+
 // ---------------- Argument parsing ---------------- //
 
 struct Args {
@@ -74,8 +211,7 @@ static std::pair<std::string_view,std::string_view> parse_flag_or_exit(std::stri
     return {name, value};
 }
 
-static int to_int_or_exit(std::string_view arg) {
-    auto [name, val] = parse_flag_or_exit(arg);
+static int to_int_or_exit(std::string_view name, std::string_view val) {
     try {
         return std::stoi(std::string(val));
     } catch (...) {
@@ -84,8 +220,7 @@ static int to_int_or_exit(std::string_view arg) {
     }
 }
 
-static std::uint32_t to_u32_or_exit(std::string_view arg) {
-    auto [name, val] = parse_flag_or_exit(arg);
+static std::uint32_t to_u32_or_exit(std::string_view name, std::string_view val) {
     try {
         return static_cast<std::uint32_t>(std::stoul(std::string(val)));
     } catch (...) {
@@ -94,8 +229,7 @@ static std::uint32_t to_u32_or_exit(std::string_view arg) {
     }
 }
 
-static std::vector<std::string> to_string_list_or_exit(std::string_view arg) {
-    auto [name, val] = parse_flag_or_exit(arg);
+static std::vector<std::string> to_string_list_or_exit(std::string_view name, std::string_view val) {
     std::vector<std::string> out;
     std::stringstream ss{std::string(val)};
     std::string item;
@@ -112,17 +246,50 @@ static std::vector<std::string> to_string_list_or_exit(std::string_view arg) {
     return out;
 }
 
+static void print_usage_and_exit() {
+    std::cout <<
+        "Conway's Game of Life\n"
+        "\n"
+        "Usage: game_of_life [--name=value ...]\n"
+        "\n"
+        "Options:\n"
+        "  --rows=N          Board height in cells (default 24)\n"
+        "  --cols=N          Board width in cells (default 40)\n"
+        "  --fps=N           Frames per second (default 15)\n"
+        "  --seed=N          Seed the random start; the same seed gives the same board\n"
+        "  --patterns=a,b    Comma-separated preset patterns, instead of a random start\n"
+        "  --help, -h        Print this message and exit\n"
+        "\n"
+        "Patterns:\n";
+
+    for (const auto& group : patterns::all()) {
+        std::cout << "  " << group.label << ": ";
+        for (size_t i = 0; i < group.members.size(); ++i) {
+            if (i) std::cout << ", ";
+            std::cout << group.members[i].name;
+        }
+        std::cout << "\n";
+    }
+
+    std::exit(0);
+}
+
 static Args parse_args(int argc, char** argv) {
     Args a; // defaults already set in struct
 
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
 
-        if      (starts_with(arg, "--rows"))    a.rows = to_int_or_exit(arg);
-        else if (starts_with(arg, "--cols"))    a.cols = to_int_or_exit(arg);
-        else if (starts_with(arg, "--fps"))     a.fps = to_int_or_exit(arg);
-        else if (starts_with(arg, "--seed"))    a.seed = to_u32_or_exit(arg);
-        else if (starts_with(arg, "--patterns")) a.patterns = to_string_list_or_exit(arg);
+        if (arg == "--help" || arg == "-h")
+            print_usage_and_exit();
+
+        auto [name, val] = parse_flag_or_exit(arg);
+
+        if      (name == "rows")     a.rows     = to_int_or_exit(name, val);
+        else if (name == "cols")     a.cols     = to_int_or_exit(name, val);
+        else if (name == "fps")      a.fps      = to_int_or_exit(name, val);
+        else if (name == "seed")     a.seed     = to_u32_or_exit(name, val);
+        else if (name == "patterns") a.patterns = to_string_list_or_exit(name, val);
         else {
             std::cerr << "Unknown argument: " << arg << "\n";
             std::exit(1);
@@ -184,117 +351,9 @@ struct Board {
     }
 };
 
+// ---------------- Pattern placement ---------------- //
+
 static void load_patterns(Board& b, const std::vector<std::string>& names) {
-    static const std::unordered_map<std::string, std::vector<std::string>> patterns = {
-        // Still Lifes
-        {"block", {
-            "OO",
-            "OO"
-        }},
-        {"beehive", {
-            ".OO.",
-            "O..O",
-            ".OO."
-        }},
-        {"loaf", {
-            ".OO.",
-            "O..O",
-            ".O.O",
-            "..O."
-        }},
-        {"boat", {
-            "OO.",
-            "O.O",
-            ".O."
-        }},
-        {"tub", {
-            ".O.",
-            "O.O",
-            ".O."
-        }},
-
-        // Oscillators
-        {"blinker", {
-            "...",
-            "OOO",
-            "...",
-        }},
-        {"toad", {
-            "....",
-            ".OOO",
-            "OOO.",
-            "....",
-        }},
-        {"beacon", {
-            "OO..",
-            "OO..",
-            "..OO",
-            "..OO"
-        }},
-        {"pulsar", {
-            "....O.....O....",
-            "....O.....O....",
-            "....OO...OO....",
-            "...............",
-            "OOO..OO.OO..OOO",
-            "..O.O.O.O.O.O..",
-            "....OO...OO....",
-            "...............",
-            "....OO...OO....",
-            "..O.O.O.O.O.O..",
-            "OOO..OO.OO..OOO",
-            "...............",
-            "....OO...OO....",
-            "....O.....O....",
-            "....O.....O....",
-        }},
-        {"pentadecathlon", {
-            ".........",
-            ".........",
-            "...OOO...",
-            "....O....",
-            "....O....",
-            "...OOO...",
-            ".........",
-            "...OOO...",
-            "...OOO...",
-            ".........",
-            "...OOO...",
-            "....O....",
-            "....O....",
-            "...OOO...",
-            ".........",
-            ".........",
-        }},
-
-        // Spaceships
-        {"glider", {
-            ".O.",
-            "..O",
-            "OOO"
-        }},
-        {"lwss", {
-            "O..O.",
-            "....O",
-            "O...O",
-            ".OOOO"
-        }},
-        {"mwss", {
-            "..O...",
-            "O...O.",
-            ".....O",
-            "O....O",
-            ".OOOOO"
-        }},
-        {"hwss", {
-            "..OO...",
-            "O....O.",
-            "......O",
-            "O.....O",
-            ".OOOOOO"
-        }},
-    };
-
     std::fill(b.cells.begin(), b.cells.end(), false);
 
     int margin = 2;          // 2-cell margin
@@ -303,13 +362,13 @@ static void load_patterns(Board& b, const std::vector<std::string>& names) {
     int jump_by_height = 0;  // tallest pattern in this row
 
     for (const auto& s : names) {
-        auto it = patterns.find(s);
-        if (it == patterns.end()) {
+        const auto* found = patterns::find(s);
+        if (!found) {
             std::cerr << "Unknown pattern: " << s << "\n";
             std::exit(1);
         }
 
-        const auto& pattern = it->second;
+        const auto& pattern = *found;
         if (pattern.empty()) 
             continue;
 
@@ -357,9 +416,10 @@ int main(int argc, char** argv) {
     std::ios::sync_with_stdio(false);
     std::cin.tie(nullptr);
 
+    Args args = parse_args(argc, argv); // before setup(): it clears the screen
+
     terminal::setup();
 
-    Args args = parse_args(argc, argv);
     Board board(args.rows, args.cols);
 
     if (!args.patterns.empty()) {
